@@ -1,0 +1,23 @@
+
+{
+  "name": "token-insight-api",
+  "version": "1.0.0",
+  "description": "API server for token activity, depth, and pattern insights on Solana",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.78.0",
+    "express": "^4.18.2",
+    "dotenv": "^16.0.3"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5",
+    "ts-node": "^10.9.1",
+    "@types/express": "^4.17.14",
+    "@types/node": "^18.11.9"
+  }
+}
