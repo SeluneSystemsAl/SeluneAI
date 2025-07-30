@@ -1,59 +1,67 @@
-import readline from "readline"
+import readline from "readline/promises"
+import { stdin, stdout } from "process"
 import { OutframeService } from "./outframeService"
 
 const service = new OutframeService()
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+const rl = readline.createInterface({ input: stdin, output: stdout })
 
-function menu() {
-  console.log(`
+async function main() {
+  while (true) {
+    console.log(`
 1) Add frame
 2) Get latest
 3) Clear frames
 4) Exit
 `)
-  rl.question("Select: ", handle)
-}
-
-async function handle(choice: string) {
-  switch (choice.trim()) {
-    case "1":
-      rl.question("Frame ID: ", id => {
-        rl.question("Payload (JSON): ", json => {
+    const choice = (await rl.question("Select: ")).trim()
+    try {
+      switch (choice) {
+        case "1": {
+          const id = (await rl.question("Frame ID: ")).trim()
+          const json = await rl.question("Payload (JSON): ")
+          let payload
           try {
-            const payload = JSON.parse(json)
-            const frame = service.addFrame(id.trim(), payload)
-            console.log("Added:", frame)
+            payload = JSON.parse(json)
           } catch {
-            console.log("Invalid JSON")
+            console.log("Invalid JSON payload")
+            break
           }
-          menu()
-        })
-      })
-      break
-    case "2":
-      rl.question("Frame ID: ", id => {
-        rl.question("Count: ", cnt => {
-          const n = parseInt(cnt) || 1
-          const frames = service.getLatest(id.trim(), n)
+          const frame = service.addFrame(id, payload)
+          console.log("Added:", frame)
+          break
+        }
+        case "2": {
+          const id = (await rl.question("Frame ID: ")).trim()
+          const cntInput = await rl.question("Count: ")
+          const count = Number.parseInt(cntInput, 10)
+          if (Number.isNaN(count) || count < 1) {
+            console.log("Invalid count, must be a positive integer")
+            break
+          }
+          const frames = service.getLatest(id, count)
           console.log("Latest frames:", frames)
-          menu()
-        })
-      })
-      break
-    case "3":
-      rl.question("Clear specific ID? (leave blank to clear all): ", id => {
-        service.clear(id.trim() || undefined)
-        console.log("Cleared")
-        menu()
-      })
-      break
-    case "4":
-      rl.close()
-      break
-    default:
-      console.log("Invalid choice")
-      menu()
+          break
+        }
+        case "3": {
+          const idInput = (await rl.question("Clear specific ID? (blank = all): ")).trim()
+          service.clear(idInput || undefined)
+          console.log(idInput ? `Cleared frames for "${idInput}"` : "Cleared all frames")
+          break
+        }
+        case "4":
+          console.log("Exiting.")
+          await rl.close()
+          return
+        default:
+          console.log(`Unknown option: "${choice}"`)
+      }
+    } catch (err: any) {
+      console.error("Error:", err.message)
+    }
   }
 }
 
-menu()
+main().catch(err => {
+  console.error("Unexpected error:", err)
+  process.exit(1)
+})
