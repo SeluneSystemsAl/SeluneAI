@@ -67,10 +67,7 @@ export class StartCellService {
     return result
   }
 
-  /**
-   * Runs the cell's work, with retries and timeout.
-   * Simulates async work; replace placeholder with real logic.
-   */
+
   public async runCell(cellId: string): Promise<CellResult> {
     this.hooks.onRunStart(cellId)
     logger.info("Run started", { cellId })
