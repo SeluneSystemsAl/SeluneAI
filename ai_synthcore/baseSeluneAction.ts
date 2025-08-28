@@ -1,98 +1,205 @@
 interface ILogger {
-  info(message: string, ...optionalParams: any[]): void
-  debug(message: string, ...optionalParams: any[]): void
-  error(message: string, ...optionalParams: any[]): void
+  info(message: string, meta?: Record<string, unknown>, ...optionalParams: unknown[]): void
+  debug(message: string, meta?: Record<string, unknown>, ...optionalParams: unknown[]): void
+  warn(message: string, meta?: Record<string, unknown>, ...optionalParams: unknown[]): void
+  error(message: string, meta?: Record<string, unknown>, ...optionalParams: unknown[]): void
+  child(context: Record<string, unknown>): ILogger
+}
+
+type LogLevel = "debug" | "info" | "warn" | "error"
+
+interface LogEntry {
+  level: LogLevel
+  time: string
+  msg: string
+  meta?: Record<string, unknown>
 }
 
 class ConsoleLogger implements ILogger {
-  info(message: string, ...optionalParams: any[]): void {
-    console.info(`[INFO] ${message}`, ...optionalParams)
+  private context: Record<string, unknown>
+
+  constructor(context: Record<string, unknown> = {}) {
+    this.context = context
   }
 
-  debug(message: string, ...optionalParams: any[]): void {
-    console.debug(`[DEBUG] ${message}`, ...optionalParams)
+  private line(level: LogLevel, message: string, meta?: Record<string, unknown>, ...rest: unknown[]) {
+    const entry: LogEntry = {
+      level,
+      time: new Date().toISOString(),
+      msg: message,
+      meta: { ...(this.context || {}), ...(meta || {}) }
+    }
+    const text = JSON.stringify(entry)
+    switch (level) {
+      case "debug":
+        console.debug(text, ...rest)
+        break
+      case "info":
+        console.info(text, ...rest)
+        break
+      case "warn":
+        console.warn(text, ...rest)
+        break
+      case "error":
+        console.error(text, ...rest)
+        break
+    }
   }
 
-  error(message: string, ...optionalParams: any[]): void {
-    console.error(`[ERROR] ${message}`, ...optionalParams)
+  info(message: string, meta?: Record<string, unknown>, ...optionalParams: unknown[]): void {
+    this.line("info", message, meta, ...optionalParams)
+  }
+
+  debug(message: string, meta?: Record<string, unknown>, ...optionalParams: unknown[]): void {
+    this.line("debug", message, meta, ...optionalParams)
+  }
+
+  warn(message: string, meta?: Record<string, unknown>, ...optionalParams: unknown[]): void {
+    this.line("warn", message, meta, ...optionalParams)
+  }
+
+  error(message: string, meta?: Record<string, unknown>, ...optionalParams: unknown[]): void {
+    this.line("error", message, meta, ...optionalParams)
+  }
+
+  child(context: Record<string, unknown>): ILogger {
+    return new ConsoleLogger({ ...(this.context || {}), ...(context || {}) })
   }
 }
 
 export abstract class BaseSeluneAction<Input, Output> {
-  protected actionName: string
-  protected logger: ILogger
+  protected readonly actionName: string
+  protected readonly logger: ILogger
+
+  private static seq = 0
 
   constructor(actionName: string, logger?: ILogger) {
     this.actionName = actionName
-    this.logger = logger ?? new ConsoleLogger()
+    this.logger = (logger ?? new ConsoleLogger()).child({ action: actionName })
   }
 
-  protected logStart(input: Input): void {
-    this.logger.info(`[${this.actionName}] start`, input)
+  protected logStart(input: Input, traceId: string): void {
+    this.logger.info("start", { traceId, input })
   }
 
-  protected logEnd(output: Output, durationMs: number): void {
-    this.logger.info(`[${this.actionName}] end (took ${durationMs}ms)`, output)
+  protected logEnd(output: Output, durationMs: number, traceId: string): void {
+    this.logger.info("end", { traceId, durationMs, output })
   }
 
-  protected logError(error: unknown): void {
-    this.logger.error(`[${this.actionName}] error`, error)
+  protected logError(error: unknown, traceId: string): void {
+    const safeError =
+      error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : { message: String(error) }
+    this.logger.error("error", { traceId, error: safeError })
+  }
+
+  private nextTraceId(): string {
+    BaseSeluneAction.seq += 1
+    const part = BaseSeluneAction.seq.toString(36).padStart(4, "0")
+    return `${Date.now().toString(36)}-${part}`
   }
 
   async run(input: Input): Promise<Output> {
+    const traceId = this.nextTraceId()
     const startTime = Date.now()
-    this.logStart(input)
+    this.logStart(input, traceId)
 
     try {
-      const result = await this.execute(input)
+      const result = await this.execute(input, traceId)
       const duration = Date.now() - startTime
-      this.logEnd(result, duration)
+      this.logEnd(result, duration, traceId)
       return result
     } catch (err) {
-      this.logError(err)
+      this.logError(err, traceId)
       throw err
     }
   }
 
-  protected abstract execute(input: Input): Promise<Output>
+  protected abstract execute(input: Input, traceId: string): Promise<Output>
 }
 
-// example concrete implementation
-
-interface FetchParams {
+export interface FetchParams {
   url: string
   init?: RequestInit
+  timeoutMs?: number
+  retries?: number
+  retryBackoffMs?: number
 }
 
-interface FetchResult {
+export interface FetchResult<T = unknown> {
   status: number
-  data: any
+  ok: boolean
+  data: T
+  headers: Record<string, string>
 }
 
-export class FetchDataAction extends BaseSeluneAction<FetchParams, FetchResult> {
+export class FetchDataAction<T = unknown> extends BaseSeluneAction<FetchParams, FetchResult<T>> {
   constructor(logger?: ILogger) {
-    super('FetchDataAction', logger)
+    super("FetchDataAction", logger)
   }
 
-  protected async execute(input: FetchParams): Promise<FetchResult> {
-    const response = await fetch(input.url, input.init)
-    const data = await response.json()
-    return {
-      status: response.status,
-      data
+  protected async execute(input: FetchParams, traceId: string): Promise<FetchResult<T>> {
+    const {
+      url,
+      init,
+      timeoutMs = 15000,
+      retries = 2,
+      retryBackoffMs = 500
+    } = input
+
+    const attempt = async (tryIndex: number): Promise<FetchResult<T>> => {
+      const controller = new AbortController()
+      const t = setTimeout(() => controller.abort(), timeoutMs)
+
+      try {
+        const res = await fetch(url, { ...(init || {}), signal: controller.signal })
+        const headers: Record<string, string> = {}
+        res.headers.forEach((v, k) => (headers[k] = v))
+
+        const contentType = res.headers.get("content-type") || ""
+        const data = contentType.includes("application/json")
+          ? ((await res.json()) as T)
+          : ((await res.text()) as unknown as T)
+
+        if (!res.ok) {
+          const err = new Error(`HTTP ${res.status}`)
+          ;(err as any).status = res.status
+          ;(err as any).data = data
+          throw err
+        }
+
+        return { status: res.status, ok: res.ok, data, headers }
+      } catch (e) {
+        if (tryIndex < retries) {
+          const next = tryIndex + 1
+          this.logger.warn("retrying", {
+            traceId,
+            attempt: next,
+            url,
+            reason: e instanceof Error ? `${e.name}: ${e.message}` : String(e)
+          })
+          await new Promise((r) => setTimeout(r, retryBackoffMs * next))
+          return attempt(next)
+        }
+        throw e
+      } finally {
+        clearTimeout(t)
+      }
     }
+
+    return attempt(0)
   }
 }
 
 // usage example
-
 async function exampleUsage() {
-  const action = new FetchDataAction()
+  const action = new FetchDataAction<any>()
   try {
-    const result = await action.run({ url: 'https://api.example.com/data' })
-    console.log('Received result:', result)
+    const result = await action.run({ url: "https://api.github.com/rate_limit" })
+    console.log("Received result:", result.status, result.ok)
   } catch (error) {
-    console.error('Action failed:', error)
+    console.error("Action failed:", error)
   }
 }
 
