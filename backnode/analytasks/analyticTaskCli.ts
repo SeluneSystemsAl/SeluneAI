@@ -1,4 +1,3 @@
-
 import readline from "readline"
 import dotenv from "dotenv"
 import { AnalyticTaskService } from "./analyticTaskService"
@@ -9,6 +8,9 @@ const rl = readline.createInterface({ input: process.stdin, output: process.stdo
 
 function menu() {
   console.log(`
+==============================
+   Analytic Task CLI
+==============================
 1) List tasks
 2) Create task
 3) Remove task
@@ -22,27 +24,38 @@ async function handle(choice: string) {
     case "1":
       console.table(svc.list())
       break
+
     case "2":
       rl.question("Task name: ", name => {
         rl.question("Params (JSON): ", json => {
-          const params = JSON.parse(json || "{}")
+          let params: Record<string, any> = {}
+          try {
+            params = json ? JSON.parse(json) : {}
+          } catch (err) {
+            console.error("Invalid JSON, using empty object.")
+          }
           const task = svc.create(name.trim(), params)
           console.log("Created:", task)
           menu()
         })
       })
-      return
+      return // skip auto-menu
+
     case "3":
       rl.question("Task ID to remove: ", id => {
         const ok = svc.remove(id.trim())
         console.log(ok ? "Removed" : "Not found")
+        menu()
       })
-      break
+      return // skip auto-menu
+
     case "4":
+      console.log("Goodbye!")
       rl.close()
-      return
+      process.exit(0)
+
     default:
-      console.log("Invalid")
+      console.log("Invalid choice")
   }
   menu()
 }
