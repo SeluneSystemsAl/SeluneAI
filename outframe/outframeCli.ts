@@ -1,67 +1,63 @@
-import readline from "readline/promises"
-import { stdin, stdout } from "process"
-import { OutframeService } from "./outframeService"
+import readline from "readline"
+import dotenv from "dotenv"
+import { AnalyticTaskService } from "./analyticTaskService"
 
-const service = new OutframeService()
-const rl = readline.createInterface({ input: stdin, output: stdout })
+dotenv.config()
+const svc = new AnalyticTaskService(process.env.STORAGE_DIR || process.cwd())
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
 
-async function main() {
-  while (true) {
-    console.log(`
-1) Add frame
-2) Get latest
-3) Clear frames
+function menu() {
+  console.log(`
+==============================
+   Analytic Task CLI
+==============================
+1) List tasks
+2) Create task
+3) Remove task
 4) Exit
 `)
-    const choice = (await rl.question("Select: ")).trim()
-    try {
-      switch (choice) {
-        case "1": {
-          const id = (await rl.question("Frame ID: ")).trim()
-          const json = await rl.question("Payload (JSON): ")
-          let payload
-          try {
-            payload = JSON.parse(json)
-          } catch {
-            console.log("Invalid JSON payload")
-            break
-          }
-          const frame = service.addFrame(id, payload)
-          console.log("Added:", frame)
-          break
-        }
-        case "2": {
-          const id = (await rl.question("Frame ID: ")).trim()
-          const cntInput = await rl.question("Count: ")
-          const count = Number.parseInt(cntInput, 10)
-          if (Number.isNaN(count) || count < 1) {
-            console.log("Invalid count, must be a positive integer")
-            break
-          }
-          const frames = service.getLatest(id, count)
-          console.log("Latest frames:", frames)
-          break
-        }
-        case "3": {
-          const idInput = (await rl.question("Clear specific ID? (blank = all): ")).trim()
-          service.clear(idInput || undefined)
-          console.log(idInput ? `Cleared frames for "${idInput}"` : "Cleared all frames")
-          break
-        }
-        case "4":
-          console.log("Exiting.")
-          await rl.close()
-          return
-        default:
-          console.log(`Unknown option: "${choice}"`)
-      }
-    } catch (err: any) {
-      console.error("Error:", err.message)
-    }
-  }
+  rl.question("Choose: ", handle)
 }
 
-main().catch(err => {
-  console.error("Unexpected error:", err)
-  process.exit(1)
-})
+async function handle(choice: string) {
+  switch (choice.trim()) {
+    case "1":
+      console.table(svc.list())
+      break
+
+    case "2":
+      rl.question("Task name: ", name => {
+        rl.question("Params (JSON): ", json => {
+          let params: Record<string, any> = {}
+          try {
+            params = json ? JSON.parse(json) : {}
+          } catch (err) {
+            console.error("Invalid JSON, using empty object.")
+          }
+          const task = svc.create(name.trim(), params)
+          console.log("Created:", task)
+          menu()
+        })
+      })
+      return // skip auto-menu
+
+    case "3":
+      rl.question("Task ID to remove: ", id => {
+        const ok = svc.remove(id.trim())
+        console.log(ok ? "Removed" : "Not found")
+        menu()
+      })
+      return // skip auto-menu
+
+    case "4":
+      console.log("Goodbye!")
+      rl.close()
+      process.exit(0)
+
+    default:
+      console.log("Invalid choice")
+  }
+  menu()
+}
+
+menu()
